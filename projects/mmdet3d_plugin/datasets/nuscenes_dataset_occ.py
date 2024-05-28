@@ -111,8 +111,8 @@ class NuScenesDatasetOccpancy(NuScenesDataset):
             for index, occ_pred in enumerate(tqdm(occ_results)):
                 # occ_pred: (Dx, Dy, Dz)
                 info = self.data_infos[index]
-                # occ_gt = np.load(os.path.join(self.data_root, info['occ_path'], 'labels.npz'))
-                occ_gt = np.load(os.path.join(info['occ_path'], 'labels.npz'))
+                occ_gt = np.load(os.path.join(self.data_root, info['occ_path'], 'labels.npz'))
+                # occ_gt = np.load(os.path.join(info['occ_path'], 'labels.npz'))
                 gt_semantics = occ_gt['semantics']      # (Dx, Dy, Dz)
                 mask_lidar = occ_gt['mask_lidar'].astype(bool)      # (Dx, Dy, Dz)
                 mask_camera = occ_gt['mask_camera'].astype(bool)    # (Dx, Dy, Dz)

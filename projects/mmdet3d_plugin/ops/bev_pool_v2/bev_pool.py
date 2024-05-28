@@ -5,7 +5,7 @@ import torch
 
 from . import bev_pool_v2_ext
 
-__all__ = ['bev_pool_v2', 'TRTBEVPoolv2']
+__all__ = ['bev_pool_v2', 'TRTBEVPoolv2', 'AXBEVPoolv2']
 
 
 class QuickCumsumCuda(torch.autograd.Function):
@@ -104,6 +104,71 @@ def bev_pool_v2(depth, feat, ranks_depth, ranks_feat, ranks_bev,
                               interval_lengths)      # (B, Dz, Dy, Dx, C)
     x = x.permute(0, 4, 1, 2, 3).contiguous()        # (B, C, Dz, Dy, Dx)
     return x
+
+
+class AXBEVPoolv2(torch.autograd.Function):
+
+    @staticmethod
+    def symbolic(g,
+                 depth,
+                 feat,
+                 ranks_depth,
+                 ranks_feat,
+                 ranks_bev,
+                 n_points, 
+                 bev_feat_shape):
+        """symbolic function for creating onnx op."""
+        return g.op(
+            'ax::BEVPoolV2',
+            depth,
+            feat,
+            ranks_depth,
+            ranks_feat,
+            ranks_bev,
+            n_points,
+            bev_feat_shape_i=bev_feat_shape)
+
+    @staticmethod
+    def forward(g,
+                depth,  # B,N,D,H,W
+                feat,  # B,N,H,W,C
+                ranks_depth,
+                ranks_feat,
+                ranks_bev,
+                n_points,
+                bev_feat_shape):
+        """run forward."""
+        ranks_depth = ranks_depth[:n_points]
+        ranks_feat = ranks_feat[:n_points]
+        ranks_bev = ranks_bev[:n_points]
+
+        B, N, _, iH, iW = depth.shape
+        C = feat.shape[-1]
+        _, oD, oW, oH, _ = bev_feat_shape
+
+        # flatten inputs
+        depth_1d = depth.flatten()
+        feat_2d = feat.reshape(B * N * iH * iW, C)
+
+        # gather depth and feat
+        gathered_depth_1d = torch.gather(input=depth_1d, dim=0, index=ranks_depth.long())
+        ranks_feat = ranks_feat.reshape(ranks_feat.shape[0], 1).repeat(1, C)
+        gathered_feat = torch.gather(input=feat_2d, dim=0, index=ranks_feat.long())
+
+        # subtract zp and mul
+        gathered_depth_2d = gathered_depth_1d.reshape(gathered_depth_1d.shape[0], 1)
+        r_mul = gathered_depth_2d * gathered_feat
+
+        # init with zeros
+        r_scatter = torch.full(fill_value=0, size=(B * oD * oW * oH, C), dtype=torch.float32, device=r_mul.device)
+
+        # scatter_add
+        ranks_bev = ranks_bev.reshape(ranks_bev.shape[0], 1).repeat(1, C)
+        r_scatter = torch.scatter_add(input=r_scatter, dim=0, index=ranks_bev.long(), src=r_mul)
+
+        # reshape
+        r = r_scatter.reshape(B, oD, oW, oH, C)
+        return r
 
 
 class TRTBEVPoolv2(torch.autograd.Function):

@@ -19,3 +19,6 @@ data/
 build-old
 ppl.cv
 .vscode
+inputs_data/
+outputs_data/
+outputs/
