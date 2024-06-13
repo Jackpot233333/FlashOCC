@@ -5,7 +5,7 @@ import torch
 
 from . import bev_pool_v2_ext
 
-__all__ = ['bev_pool_v2', 'TRTBEVPoolv2', 'AXBEVPoolv2']
+__all__ = ['bev_pool_v2', 'TRTBEVPoolv2', 'AXBEVPoolv2', 'ax_bev_pool_v2_maxn']
 
 
 class QuickCumsumCuda(torch.autograd.Function):
@@ -169,6 +169,47 @@ class AXBEVPoolv2(torch.autograd.Function):
         # reshape
         r = r_scatter.reshape(B, oD, oW, oH, C)
         return r
+
+
+def ax_bev_pool_v2_maxn(depth, feat, ranks_depth, ranks_feat, maxn, bev_feat_shape):
+    """
+    Args:
+        depth: (B, N, D, fH, fW)
+        feat:  (B, N, fH, fW, C)
+        ranks_depth: (D_Z * D_Y * D_X * maxn),
+        ranks_feat:  (D_Z * D_Y * D_X * maxn),
+        bev_feat_shape: (B, D_Z, D_Y, D_X, C)
+
+    Returns:
+        r: bev feature in shape (B, C, Dz, Dy, Dx)
+    """
+    B, N, D, iH, iW = depth.shape
+    C = feat.shape[-1]
+    _, oD, oW, oH, _ = bev_feat_shape
+
+    # flatten inputs
+    depth_2d = depth.reshape(B * N * D * iH * iW, 1)
+    feat_2d = feat.reshape(B * N * iH * iW, C)
+
+    depth_2d = torch.cat((depth_2d, torch.zeros([1, 1], dtype=torch.float32, device=depth_2d.device)), 0)
+    feat_2d = torch.cat((feat_2d, torch.zeros([1, 64], dtype=torch.float32, device=feat_2d.device)), 0)
+
+    # gather depth and feat
+    # gathered_depth = torch.gather(input=depth_2d, dim=0, index=ranks_depth.long())
+    # gathered_feat = torch.gather(input=feat_2d, dim=0, index=ranks_feat.long())
+    gathered_depth = depth_2d[ranks_depth.tolist()]
+    gathered_feat = feat_2d[ranks_feat.tolist()]
+
+    # subtract zp and mul
+    r_mul = gathered_depth * gathered_feat
+
+    # scatter_add
+    r_mul = r_mul.reshape(oD, oW, oH, maxn, C)
+    r_scatter = r_mul.sum(dim=3, keepdim=True)
+
+    # permute
+    r = r_scatter.permute(3, 0, 1, 2, 4)
+    return r
 
 
 class TRTBEVPoolv2(torch.autograd.Function):

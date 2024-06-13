@@ -263,14 +263,6 @@ def main():
     from tqdm import tqdm
     import numpy as np
 
-    if args.task == "save_data":
-        all_data_path = Path("./inputs_data/all_data")
-        calibration_path = Path("./inputs_data/calibration")
-        if not os.path.exists(all_data_path):
-            os.makedirs(all_data_path)
-        if not os.path.exists(calibration_path):
-            os.makedirs(calibration_path)
-
     model.eval()
     results = []
     for i, data in enumerate(tqdm(data_loader)):
@@ -288,7 +280,20 @@ def main():
                     metas[1].int().contiguous().cuda(), metas[2].int().contiguous().cuda(),
                     torch.tensor([metas[3]]).int().contiguous().cuda())
                 result = list(result.cpu().numpy().astype(np.uint8))
-            elif args.task == "save_data":
+            elif args.task == "pytorch_axmaxn":
+                model.cuda()
+                model.forward = model.forward_with_argmax
+                result = model(img.float().contiguous().cuda(), metas[0].int().contiguous().cuda(),
+                    metas[1].int().contiguous().cuda())
+                result = list(result.cpu().numpy().astype(np.uint8))
+            elif args.task == "save_data_ax":
+                # python3 tools/test_all.py projects/configs/flashocc/flashocc-r50-M0-ax.py  ckpts/flashocc-r50-M0-256x704.pth --eval map --task save_data
+                all_data_path = Path("./inputs_data/all_data")
+                calibration_path = Path("./inputs_data/calibration")
+                if not os.path.exists(all_data_path):
+                    os.makedirs(all_data_path)
+                if not os.path.exists(calibration_path):
+                    os.makedirs(calibration_path)
                 onnx_input = {
                     "img": img.numpy(),
                     "ranks_depth": metas[0].int().contiguous().numpy(),
@@ -300,16 +305,36 @@ def main():
                 if i < 128:
                     np.save(calibration_path.joinpath(f"{i}.npy"), onnx_input)
                 result = [None]
+            elif args.task == "save_data_axmaxn":
+                # python3 tools/test_all.py projects/configs/flashocc/flashocc-r50-M0-axmaxn.py ckpts/maxn.pth --eval map --task save_data_axmaxn
+                all_data_path = Path("./inputs_data/all_data_maxn")
+                calibration_path = Path("./inputs_data/calibration_maxn")
+                if not os.path.exists(all_data_path):
+                    os.makedirs(all_data_path)
+                if not os.path.exists(calibration_path):
+                    os.makedirs(calibration_path)
+                onnx_input = {
+                    "img": img.numpy(),
+                    "indices_depth": metas[0].int().contiguous().numpy(),
+                    "indices_feat": metas[1].int().contiguous().numpy(),
+                }
+                np.save(all_data_path.joinpath(f"{i}.npy"), onnx_input)
+                if i < 128:
+                    np.save(calibration_path.joinpath(f"{i}.npy"), onnx_input)
+                result = [None]
             elif args.task == "load_data":
-                result = np.load(Path(args.outputs_data).joinpath(f"{i}.npy"), allow_pickle=True).tolist()["cls_occ_label"]
-                result = list(result.astype(np.uint8))
+                try:
+                    result = np.load(Path(args.outputs_data).joinpath(f"{i}.npy"), allow_pickle=True).tolist()["cls_occ_label"]
+                    result = list(result.astype(np.uint8))
+                except:
+                    break
             else:
                 assert False, "illegal task"
         
         results.extend(result)
 
     outputs = results
-    if args.task == "save_data":
+    if args.task in ["save_data_ax", "save_data_axmaxn"]:
         exit()
 
 

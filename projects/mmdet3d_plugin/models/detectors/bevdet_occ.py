@@ -1,5 +1,5 @@
 # Copyright (c) Phigent Robotics. All rights reserved.
-from ...ops import TRTBEVPoolv2, AXBEVPoolv2
+from ...ops import TRTBEVPoolv2, AXBEVPoolv2, ax_bev_pool_v2_maxn
 from .bevdet import BEVDet
 from .bevdepth import BEVDepth
 from .bevdepth4d import BEVDepth4D
@@ -748,6 +748,112 @@ class BEVDetOCCAX(BEVDetOCC):
         input = self.prepare_inputs(input)
         coor = self.img_view_transformer.get_lidar_coor(*input[1:7])
         return self.img_view_transformer.voxel_pooling_prepare_ax(coor)
+
+
+@DETECTORS.register_module()
+class BEVDetOCCAXMAXN(BEVDetOCC):
+    def __init__(self,
+                 wocc=True,
+                 wdet3d=True,
+                 uni_train=True,
+                 maxN=None,
+                 **kwargs):
+        super(BEVDetOCCAXMAXN, self).__init__(**kwargs)
+        self.wocc = wocc
+        self.wdet3d = wdet3d
+        self.uni_train = uni_train
+        self.maxN = maxN
+        
+    def result_serialize(self, outs_det3d=None, outs_occ=None):
+        outs_ = []
+        if outs_det3d is not None:
+            for out in outs_det3d:
+                for key in ['reg', 'height', 'dim', 'rot', 'vel', 'heatmap']:
+                    outs_.append(out[0][key])
+        if outs_occ is not None:
+            outs_.append(outs_occ)
+        return outs_
+
+    def result_deserialize(self, outs):
+        outs_ = []
+        keys = ['reg', 'height', 'dim', 'rot', 'vel', 'heatmap']
+        for head_id in range(len(outs) // 6):
+            outs_head = [dict()]
+            for kid, key in enumerate(keys):
+                outs_head[0][key] = outs[head_id * 6 + kid]
+            outs_.append(outs_head)
+        return outs_
+
+    def forward_ori(
+        self,
+        img,
+        indices_depth,
+        indices_feat,
+    ):
+        B, N, C, imH, imW = img.shape
+        img = img.view(B * N, C, imH, imW)
+        x = self.img_backbone(img)
+        x = self.img_neck(x)
+        x = self.img_view_transformer.depth_net(x[0])
+        depth = x[:, :self.img_view_transformer.D].softmax(dim=1)
+        tran_feat = x[:, self.img_view_transformer.D:(
+            self.img_view_transformer.D +
+            self.img_view_transformer.out_channels)]
+        tran_feat = tran_feat.permute(0, 2, 3, 1)
+
+        NB, D, H, W = depth.shape
+        NB, H, W, C = tran_feat.shape
+        depth = depth.view(B, N, D, H, W)
+        tran_feat = tran_feat.view(B, N, H, W, C)
+
+        bev_feat_shape = (depth.shape[0], int(self.img_view_transformer.grid_size[2]),
+                        int(self.img_view_transformer.grid_size[1]), int(self.img_view_transformer.grid_size[0]),
+                        tran_feat.shape[-1])       # (B, Dz, Dy, Dx, C)
+        x = ax_bev_pool_v2_maxn(depth.contiguous(), tran_feat.contiguous(),
+                               indices_depth, indices_feat, 20,
+                               bev_feat_shape)    # (B, Dz, Dy, Dx, C)
+        x = x.permute(0, 4, 1, 2, 3).contiguous()        # (B, C, Dz, Dy, Dx)
+        B, C, Dz, Dy, Dx = x.shape
+        x = x.view(B, C, Dy, Dx)
+
+        bev_feature = self.img_bev_encoder_backbone(x)
+        occ_bev_feature = self.img_bev_encoder_neck(bev_feature)
+
+        outs_occ = None
+        if self.wocc == True:
+            if self.uni_train == True:
+                if self.upsample:
+                    occ_bev_feature = F.interpolate(occ_bev_feature, scale_factor=2,
+                                                    mode='bilinear', align_corners=True)
+            outs_occ = self.occ_head(occ_bev_feature)
+
+        outs_det3d = None
+        if self.wdet3d == True:
+            outs_det3d = self.pts_bbox_head([occ_bev_feature])
+
+        outs = self.result_serialize(outs_det3d, outs_occ)
+        return outs
+
+    def forward_with_argmax(
+        self,
+        img,
+        indices_depth,
+        indices_feat,
+    ):
+
+        outs = self.forward_ori(
+                img,
+                indices_depth,
+                indices_feat,
+            )
+        pred_occ_label = outs[0].argmax(-1)
+        return pred_occ_label
+
+
+    def get_bev_pool_input(self, input):
+        input = self.prepare_inputs(input)
+        coor = self.img_view_transformer.get_lidar_coor(*input[1:7])
+        return self.img_view_transformer.voxel_pooling_prepare_axmaxn(coor, save_indices=True)
 
 
 @DETECTORS.register_module()
