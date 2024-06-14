@@ -197,8 +197,8 @@ def ax_bev_pool_v2_maxn(depth, feat, ranks_depth, ranks_feat, maxn, bev_feat_sha
     # gather depth and feat
     # gathered_depth = torch.gather(input=depth_2d, dim=0, index=ranks_depth.long())
     # gathered_feat = torch.gather(input=feat_2d, dim=0, index=ranks_feat.long())
-    gathered_depth = depth_2d[ranks_depth.tolist()]
-    gathered_feat = feat_2d[ranks_feat.tolist()]
+    gathered_depth = torch.index_select(depth_2d, 0, ranks_depth)
+    gathered_feat = torch.index_select(feat_2d, 0, ranks_feat)
 
     # subtract zp and mul
     r_mul = gathered_depth * gathered_feat
